@@ -1,0 +1,64 @@
+agent:
+  source_id: station-001
+  work_dir: ./runtime
+  scan_seconds: 10
+  min_free_bytes: 1073741824
+  log_level: INFO
+
+files:
+  - id: fy3f-mersi
+    system: PUUSDATA
+    root: E:/PUUSDATA/FY3F/MERSI/L1/2026
+    include: ['**/*.hdf', '**/*.xml']
+    exclude: ['**/*.tmp', '**/*.part', '**/*.done']
+    recursive: true
+    initial_scan: new_only
+    stable_seconds: 60
+    quiet_seconds: 120
+    # FY3F_20260803_0145 is the batch identity shared by .hdf/.xml files.
+    filename_regex: 'ZNET_(?P<batch_no>(?P<satellite>FY3F)_(?P<obs_time>\d{8}_\d{4}))\.(?P<role>hdf|xml)'
+    obs_time_format: '%Y%m%d_%H%M'
+    timezone_offset: '+08:00'
+    prefix: rs-raw
+
+# Enable only after verifying commit-order guarantees (see docs/operations.md).
+mysql: []
+#  - id: orders
+#    host: 127.0.0.1
+#    port: 3306
+#    user: env:SYNC_MYSQL_USER
+#    password: env:SYNC_MYSQL_PASSWORD
+#    database: production
+#    table: orders
+#    primary_key: id
+#    fields: [id, created_at, amount]
+#    batch_size: 1000
+#    poll_seconds: 10
+#    initial_scan: new_only
+#    prefix: db-increment
+#    commit_order_guaranteed: true
+
+targets:
+  - id: suzhou
+    enabled: true
+    host: suzhou-transfer.example.internal
+    port: 443
+    bucket: enterprise-raw
+    prefix: transfer
+    access_key: env:SYNC_SZ_ACCESS_KEY
+    secret_key: env:SYNC_SZ_SECRET_KEY
+    # ca_bundle: ./certificates/internal-ca.pem
+    concurrency: 2
+    timeout_seconds: 60
+    retry_initial_seconds: 2
+    retry_max_seconds: 300
+    part_size: 16777216
+    multipart_threshold: 16777216
+  - id: site-b
+    enabled: false
+    host: site-b-transfer.example.internal
+    port: 443
+    bucket: enterprise-raw
+    prefix: transfer
+    access_key: env:SYNC_B_ACCESS_KEY
+    secret_key: env:SYNC_B_SECRET_KEY

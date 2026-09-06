@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-sync-agent"
+version = "0.1.0"
+description = "Durable multi-destination MinIO transfer agent"
+requires-python = ">=3.9"
+dependencies = ["pydantic>=2.10,<3", "PyYAML>=6,<7", "boto3>=1.40,<2", "PyMySQL[rsa]>=1.1,<2"]
+
+[project.optional-dependencies]
+windows = ["pywin32>=308; sys_platform == 'win32'", "pyinstaller>=6,<7"]
+test = ["pytest>=8,<9"]
+
+[project.scripts]
+data-sync = "data_sync.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["data_sync*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
