@@ -1,9 +1,28 @@
 import json
+import pytest
 
 from data_sync.state import State
 from data_sync.transport import Delivery
 from tests.fakes import FakeS3
 from tests.test_files import ready_batch
+
+
+@pytest.mark.parametrize("response", [None, "not a mapping", {"Error": None}, {"Error": "invalid"}])
+def test_head_error_preserves_original_failure(config, state, response):
+    class ConnectionFailure(Exception):
+        pass
+
+    failure = ConnectionFailure("sensitive details must not enter the ledger")
+    failure.response = response
+
+    class BrokenS3:
+        def head_object(self, **kwargs):
+            raise failure
+
+    ready_batch(config, state)
+    Delivery(state, config.targets[0], BrokenS3()).run(claim(state))
+    row = state.one("SELECT status,error FROM tasks")
+    assert tuple(row) == ("RETRY_WAIT", "ConnectionFailure")
 
 
 def claim(state, target="sz"):

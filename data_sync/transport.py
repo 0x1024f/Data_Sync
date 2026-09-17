@@ -6,6 +6,7 @@ import logging
 import math
 import random
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 from .config import secret
@@ -19,8 +20,15 @@ class Conflict(Exception):
 
 
 def error_code(error):
-    response = getattr(error, "response", {})
-    return str(response.get("Error", {}).get("Code", type(error).__name__))
+    fallback = type(error).__name__
+    response = getattr(error, "response", None)
+    if not isinstance(response, Mapping):
+        return fallback
+    detail = response.get("Error")
+    if not isinstance(detail, Mapping):
+        return fallback
+    code = detail.get("Code")
+    return str(code) if code is not None else fallback
 
 
 def client_for(target):

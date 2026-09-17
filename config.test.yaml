@@ -1,0 +1,34 @@
+agent:
+  source_id: station-relay-test-001
+  work_dir: ./runtime-relay-test
+  scan_seconds: 2
+  min_free_bytes: 1073741824
+  log_level: INFO
+
+files:
+  - id: fy3f-mersi-test
+    system: PUUSDATA
+    root: ./test-input
+    include: ['**/*.hdf', '**/*.xml']
+    exclude: ['**/*.tmp', '**/*.part', '**/*.done']
+    recursive: true
+    initial_scan: existing_and_new
+    stable_seconds: 3
+    quiet_seconds: 5
+    filename_regex: 'ZNET_(?P<batch_no>(?P<satellite>FY3F)_(?P<obs_time>\d{8}_\d{4}))\.(?P<role>hdf|xml)'
+    obs_time_format: '%Y%m%d_%H%M'
+    timezone_offset: '+08:00'
+    prefix: rs-raw
+
+mysql: []
+
+targets:
+  - id: minio-via-relay
+    enabled: true
+    host: minio.test
+    port: 443
+    bucket: enterprise-raw
+    prefix: transfer
+    access_key: env:SYNC_TEST_ACCESS_KEY
+    secret_key: env:SYNC_TEST_SECRET_KEY
+    ca_bundle: ./certificates/minio-test.crt
