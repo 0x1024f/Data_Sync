@@ -82,9 +82,15 @@ class State:
             for source in config.files + config.mysql:
                 # Capture/identity changes need a new source id; tuning may change.
                 fields = ("root", "system", "filename_regex", "obs_time_format", "timezone_offset", "prefix", "include", "exclude", "recursive") if hasattr(source, "root") else ("host", "port", "database", "table", "primary_key", "fields", "prefix")
-                fingerprint = canonical({k: str(getattr(source, k)) for k in fields}).decode()
+                identity = {k: str(getattr(source, k)) for k in fields}
+                if hasattr(source, "path_layout"):
+                    identity["path_layout"] = source.path_layout
+                fingerprint = canonical(identity).decode()
                 old = self.one("SELECT fingerprint FROM sources WHERE id=?", (source.id,))
-                if old and old[0] != fingerprint:
+                previous = json.loads(old[0]) if old else None
+                if previous is not None and hasattr(source, "path_layout"):
+                    previous.setdefault("path_layout", "batch")
+                if old and previous != identity:
                     raise ValueError("source identity changed; use a new source id")
                 db.execute("INSERT OR IGNORE INTO sources(id,fingerprint) VALUES (?,?)", (source.id, fingerprint))
             configured = {t.id for t in config.targets}

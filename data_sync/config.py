@@ -48,6 +48,7 @@ class FileSource(Strict):
     initial_scan: Literal["new_only", "existing_and_new"] = "new_only"
     stable_seconds: float = Field(default=60, ge=0)
     quiet_seconds: float = Field(default=120, ge=0)
+    path_layout: Literal["batch", "relative"] = "batch"
     filename_regex: str
     obs_time_format: str = "%Y%m%d_%H%M"
     timezone_offset: str = "+08:00"

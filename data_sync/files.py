@@ -65,6 +65,10 @@ class FileCollector:
                     self.state.db.execute("INSERT INTO files(source,path,size,mtime,changed,status) VALUES (?,?,?,?,?,?)",
                                           (source.id, relative, stat.st_size, stat.st_mtime_ns, now, status))
                     row = self.state.one("SELECT * FROM files WHERE source=? AND path=?", (source.id, relative))
+                if source.path_layout == "relative" and relative.split("/")[0] == "_data_sync":
+                    if row["status"] != "QUARANTINED":
+                        self._error(source.id, relative, "RESERVED_PATH")
+                    continue
                 if row["status"] in ("IGNORED", "QUARANTINED"):
                     continue
                 changed = row["size"] != stat.st_size or row["mtime"] != stat.st_mtime_ns
@@ -148,6 +152,8 @@ class FileCollector:
         if shutil.disk_usage(self.config.agent.work_dir).free < sum(r["size"] for r in rows) + self.config.agent.min_free_bytes:
             raise OSError("insufficient spool space")
         dataset = json.loads(batch["dataset"])
+        if source.path_layout == "relative":
+            dataset["capture_id"] = batch["id"]
         date = datetime.fromisoformat(dataset.get("obs_time", utc_text(batch["created"]))).strftime("%Y/%m/%d")
         prefix = "/".join((self.config.targets[0].prefix, source.prefix, self.config.agent.source_id, source.id, date, batch["batch_no"]))
         directory = self.config.agent.work_dir / "spool" / batch["id"]
@@ -178,7 +184,7 @@ class FileCollector:
             if size != row["size"]:
                 raise ValueError("snapshot size mismatch")
             groups = re.fullmatch(source.filename_regex, Path(row["path"]).name).groupdict()
-            key = safe_key(prefix + "/data/" + row["path"])
+            key = safe_key(row["path"] if source.path_layout == "relative" else prefix + "/data/" + row["path"])
             files.append({"name": Path(row["path"]).name, "role": groups.get("role") or "primary", "relative_path": row["path"],
                           "target_key": key, "size": size, "content_type": {".hdf": "application/x-hdf", ".h5": "application/x-hdf", ".xml": "application/xml"}.get(Path(row["path"]).suffix.lower(), "application/octet-stream"),
                           "checksum": {"algorithm": "sha256", "value": digest}})
@@ -186,4 +192,6 @@ class FileCollector:
         manifest = build_manifest({"source_id": self.config.agent.source_id, "system": source.system, "relative_path": "."},
                                   batch["batch_no"], dataset, files, utc_text(batch["created"]))
         atomic_bytes(directory / "manifest.json", canonical(manifest))
-        self.state.ready(batch["id"], manifest, prefix + "/manifest.json", local)
+        manifest_key = ("_data_sync/manifests/" + manifest["manifest_id"].removeprefix("sha256:") + ".json"
+                        if source.path_layout == "relative" else prefix + "/manifest.json")
+        self.state.ready(batch["id"], manifest, manifest_key, local)

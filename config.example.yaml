@@ -15,6 +15,8 @@ files:
     initial_scan: new_only
     stable_seconds: 60
     quiet_seconds: 120
+    # batch: legacy batch directories; relative: exact root-relative keys at bucket root.
+    path_layout: batch
     # FY3F_20260803_0145 is the batch identity shared by .hdf/.xml files.
     filename_regex: 'ZNET_(?P<batch_no>(?P<satellite>FY3F)_(?P<obs_time>\d{8}_\d{4}))\.(?P<role>hdf|xml)'
     obs_time_format: '%Y%m%d_%H%M'

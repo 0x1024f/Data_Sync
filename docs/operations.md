@@ -1,5 +1,24 @@
 # 部署与故障处理
 
+## 文件相对路径模式
+
+文件源设置 `path_layout: relative` 后，数据对象直接使用相对于 `root` 的路径：
+例如 `E:/data/FY3F/a.hdf`（root 为 `E:/data`）上传到 `bucket/FY3F/a.hdf`。
+此模式不使用 targets.prefix 或 files.prefix，不添加日期、站点、批次或 data 目录。
+省略 path_layout 或设置 batch 时保持原来的路径结构；MySQL 路径不受影响。
+
+批次清单最后提交到 `_data_sync/manifests/<manifest_id摘要>.json`。
+清单 dataset.capture_id 使用持久化批次 ID，以区分内容相同但采集时间不同的批次。
+桶根目录的 `_data_sync` 是保留名称，命中采集规则的同名根文件或该目录下文件会以
+`RESERVED_PATH` 隔离。原有正则分批、稳定窗口和静默窗口仍然有效。
+同路径同内容复用，内容不同则 BLOCKED，不覆盖；多个来源共享桶时同样适用。
+
+切换已有源时使用新 files.id，并设置 `initial_scan: new_only`；首次扫描所见文件被忽略，
+之后新增文件才采集（首次扫描之前到达的文件也属于基线）。不要删除 work_dir 或远端旧对象。
+旧任务继续使用保存的对象路径。旧源 ID 直接改变 path_layout 会被拒绝。
+相对路径模式账号需要业务相对路径及 `_data_sync/manifests/` 的上传、HEAD、分片恢复权限，
+以及对应范围的 ListBucket 权限；仅授权原 transfer/ 前缀将无法使用新模式。
+
 ## Windows Agent
 
 建议在 Windows x64 / Python 3.11 或 3.12 上构建。源代码兼容 Python 3.9+。在项目目录执行 `python -m pip install '.[test,windows]'`，再执行 `powershell -File deploy/windows/build.ps1`。Windows 二进制必须在 Windows构建；不能把 macOS构建产物作为 Windows服务部署。
