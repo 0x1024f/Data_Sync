@@ -1,4 +1,4 @@
-"""Strict configuration. Secrets are environment references, never literal values."""
+"""Strict configuration with literal or environment-referenced MinIO credentials."""
 import os
 import re
 import ipaddress
@@ -19,6 +19,10 @@ def safe_key(value: str) -> str:
 
 
 def secret(ref: str) -> str:
+    if not ref.startswith("env:"):
+        if not ref.strip():
+            raise ValueError("credential must not be empty")
+        return ref
     name = ref.removeprefix("env:")
     value = os.environ.get(name)
     if not value:
@@ -79,13 +83,14 @@ class Target(Strict):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     enabled: bool = True
     enabled_at: Optional[datetime] = None
+    scheme: Literal["http", "https"] = "https"
     host: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9.-]+$")
     port: int = Field(default=443, ge=1, le=65535)
     bucket: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
     prefix: str = "transfer"
     region: str = "us-east-1"
-    access_key: str = Field(pattern=r"^env:[A-Za-z_][A-Za-z0-9_]*$")
-    secret_key: str = Field(pattern=r"^env:[A-Za-z_][A-Za-z0-9_]*$")
+    access_key: str = Field(min_length=1, repr=False)
+    secret_key: str = Field(min_length=1, repr=False)
     ca_bundle: Optional[Path] = None
     concurrency: int = Field(default=2, ge=1, le=32)
     timeout_seconds: int = Field(default=60, ge=1, le=600)
@@ -94,15 +99,27 @@ class Target(Strict):
     part_size: int = Field(default=16777216, ge=5242880, le=536870912)
     multipart_threshold: int = Field(default=16777216, ge=5242880, le=536870912)
 
-    @field_validator("host")
+    @field_validator("access_key", "secret_key")
     @classmethod
-    def sni_domain(cls, v):
+    def credential(cls, value):
+        if not value.strip():
+            raise ValueError("credential must not be empty")
+        if value.startswith("env:") and not re.fullmatch(r"env:[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError("invalid credential environment reference")
+        return value
+
+    @model_validator(mode="after")
+    def transport(self):
+        if self.scheme == "http":
+            if self.ca_bundle is not None:
+                raise ValueError("ca_bundle requires HTTPS; remove it for HTTP targets")
+            return self
         try:
-            ipaddress.ip_address(v)
+            ipaddress.ip_address(self.host)
         except ValueError:
-            if "." not in v:
+            if "." not in self.host:
                 raise ValueError("use a fully qualified SNI domain")
-            return v
+            return self
         raise ValueError("SNI routing requires a domain, not an IP address")
 
     @field_validator("prefix")
@@ -171,8 +188,6 @@ class Config(Strict):
             raise ValueError("target ids must be unique")
         if len({t.prefix for t in self.targets}) != 1:
             raise ValueError("all targets must use identical prefixes for shared manifests")
-        if len({t.port for t in self.targets}) != 1:
-            raise ValueError("all targets must use the same relay port")
         if not self.files and not self.mysql:
             raise ValueError("configure at least one source")
         return self

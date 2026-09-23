@@ -34,7 +34,7 @@ def error_code(error):
 def client_for(target):
     import boto3
     from botocore.config import Config
-    return boto3.client("s3", endpoint_url=f"https://{target.host}:{target.port}", region_name=target.region,
+    return boto3.client("s3", endpoint_url=f"{target.scheme}://{target.host}:{target.port}", region_name=target.region,
                         aws_access_key_id=secret(target.access_key), aws_secret_access_key=secret(target.secret_key),
                         verify=str(target.ca_bundle) if target.ca_bundle else True,
                         config=Config(signature_version="s3v4", s3={"addressing_style": "path"},

@@ -29,7 +29,7 @@ def test_unsafe_keys(key):
 
 def test_strict_config(config):
     data = config.model_dump()
-    data["targets"][0]["secret_key"] = "literal-secret"
+    data["targets"][0]["secret_key"] = ""
     with pytest.raises(ValidationError):
         Config.model_validate(data)
     data = config.model_dump()

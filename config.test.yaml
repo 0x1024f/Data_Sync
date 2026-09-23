@@ -23,12 +23,14 @@ files:
 mysql: []
 
 targets:
-  - id: minio-via-relay
+  - id: minio-http
     enabled: true
-    host: minio.test
-    port: 443
+    scheme: http
+    host: 192.168.0.21
+    port: 30009
+    # Replace with the existing bucket provided by the MinIO administrator.
     bucket: enterprise-raw
     prefix: transfer
-    access_key: env:SYNC_TEST_ACCESS_KEY
-    secret_key: env:SYNC_TEST_SECRET_KEY
-    ca_bundle: ./certificates/minio-test.crt
+    # Fill in literal credentials, or use env:VARIABLE_NAME.
+    access_key: 'YOUR_MINIO_ACCESS_KEY'
+    secret_key: 'YOUR_MINIO_SECRET_KEY'

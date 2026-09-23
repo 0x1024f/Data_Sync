@@ -99,6 +99,9 @@ class State:
                     db.execute("UPDATE targets SET enabled=0 WHERE id=?", (old[0],))
             for target in config.targets:
                 fingerprint = canonical([target.host, target.port, target.bucket, target.prefix]).decode()
+                # Preserve legacy HTTPS fingerprints while distinguishing HTTP endpoints.
+                if target.scheme != "https":
+                    fingerprint = canonical([target.host, target.port, target.bucket, target.prefix, target.scheme]).decode()
                 old = self.one("SELECT * FROM targets WHERE id=?", (target.id,))
                 if old and old["fingerprint"] != fingerprint:
                     raise ValueError("target endpoint changed; use a new target id")

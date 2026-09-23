@@ -43,12 +43,15 @@ mysql: []
 targets:
   - id: suzhou
     enabled: true
+    # Use http for a direct plaintext MinIO endpoint; omit ca_bundle in that case.
+    scheme: https
     host: suzhou-transfer.example.internal
     port: 443
     bucket: enterprise-raw
     prefix: transfer
-    access_key: env:SYNC_SZ_ACCESS_KEY
-    secret_key: env:SYNC_SZ_SECRET_KEY
+    # Literal strings and env:VARIABLE_NAME references are both supported.
+    access_key: 'YOUR_MINIO_ACCESS_KEY'
+    secret_key: 'YOUR_MINIO_SECRET_KEY'
     # ca_bundle: ./certificates/internal-ca.pem
     concurrency: 2
     timeout_seconds: 60

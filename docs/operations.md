@@ -25,7 +25,7 @@
 
 交付 dist/data-sync 与 dist/data-sync-service 两个完整目录，包含各自 _internal依赖。把 config.example.yaml复制为服务目录 config.yaml，填写源目录、文件正则、目标域名、CA和工作目录。命令行工具始终用 `--config`指定同一文件。相对路径以配置文件目录为基准。文件扫描范围避免包含 work_dir，避免多个 Agent使用同一 source_id向同一对象前缀写数据。
 
-凭据只支持 env:变量名；在服务账户可见的环境中配置。交互终端里的临时环境变量不会自动传给 SCM启动的服务。安装后通过服务管理器设置专用账户，赋予源目录只读、work_dir读写和配置/CA读取权限。部署时确认账户环境变量已生效，必要时重新登录或重启主机。不要把密钥写入命令行参数、版本库或日志。
+MinIO 的 access_key 和 secret_key 支持直接填写带引号的字符串，也支持 env:变量名；以 env: 开头的值始终按环境变量引用解析。真实凭据可保存在已被 Git 忽略的 config.local.yaml 中。MySQL 凭据仍使用 env:变量名。使用环境变量时，在服务账户可见的环境中配置；交互终端里的临时环境变量不会自动传给 SCM启动的服务。安装后通过服务管理器设置专用账户，赋予源目录只读、work_dir读写和配置/CA读取权限。不要把密钥写入命令行参数、版本库或日志。
 
 命令示例：
 
@@ -43,6 +43,32 @@ Stop-Service DataSyncAgent
 升级时停止服务，保留配置、环境凭据和完整 work_dir，备份 SQLite与WAL（或关闭后备份），替换完整程序目录再启动。数据库版本比程序新时拒绝打开；不要用旧程序写新版本状态。
 
 ## 单端口与证书
+
+### HTTP 直连 MinIO
+
+对 `http://192.168.0.21:30009`，目标配置使用：
+
+```yaml
+targets:
+  - id: minio-http
+    scheme: http
+    host: 192.168.0.21
+    port: 30009
+    bucket: enterprise-raw # 示例值，必须改为对方已创建的实际桶名
+    prefix: transfer
+    access_key: 'YOUR_MINIO_ACCESS_KEY'
+    secret_key: 'YOUR_MINIO_SECRET_KEY'
+```
+
+HTTP 不配置 `ca_bundle`，不需要证书，但仍通过 Access Key / Secret Key 签名认证。将对方提供的 MINIO_ROOT_USER 值填写到 access_key，将 MINIO_ROOT_PASSWORD 值填写到 secret_key。也可分别填写 env:MINIO_ACCESS_KEY 和 env:MINIO_SECRET_KEY 并设置对应环境变量；程序不会自动读取 .env 文件。HTTP 传输内容不加密，应在可信网络中使用。
+
+复制 `config.test.yaml` 为 `config.local.yaml`，采集目录为 `./test-input`。填写凭据并确认实际桶名后执行 `python -m data_sync --config config.local.yaml validate`，再执行 `python -m data_sync --config config.local.yaml run`。validate 只检查配置和凭据是否存在，不会验证远端连接。
+
+省略 `scheme` 仍默认 HTTPS，端口默认 443；HTTP 请显式填写实际端口。不同目标可使用不同端口。已有目标改变协议、地址或桶时使用新 id；新目标不会补发历史批次。
+
+### HTTPS 单端口 SNI 透传
+
+以下配置仅适用于 HTTPS。HTTP 直连必须从 Agent 网络可达上述 IP 和端口，不能经过现有拒绝非 TLS 流量的 SNI 透传入口。
 
 内网 DNS或 hosts将 suzhou-transfer.example.internal、site-b-transfer.example.internal均指向前置机 IP。端口统一为443。使用域名确保 TLS SNI和证书验证生效。前置机到各目标放行 MinIO HTTPS API端口，MinIO证书 SAN必须覆盖对应传输域名。目标的9000如果仍为明文 HTTP，不能直接接入此 TLS透传配置。
 
