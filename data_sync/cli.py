@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .config import load_config, secret
 from .runtime import Agent, ProcessLock
-from .state import State
+from .state import LegacyFileStateError, State
 
 
 def main(argv=None):
@@ -43,7 +43,7 @@ def main(argv=None):
             if not path.exists():
                 raise ValueError("state not initialized")
             if args.command == "status":
-                # Read-only SQLite connection; no migration, lease or configuration changes.
+                # 使用只读 SQLite 连接，不执行迁移，也不修改租约或配置。
                 import sqlite3
                 state = object.__new__(State)
                 state.db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
@@ -63,12 +63,14 @@ def main(argv=None):
                         state.close()
         return 0
     except Exception as error:
-        # Pydantic and SDK exceptions can echo secret-bearing input. Expose field
-        # locations/type only; never print raw input or connection error messages.
+        # Pydantic 和 SDK 异常可能回显包含敏感信息的输入。仅显示字段位置和类型，
+        # 禁止输出原始输入或连接错误信息。
         from pydantic import ValidationError
         if isinstance(error, ValidationError):
             errors = [{"field": ".".join(str(x) for x in e["loc"]), "type": e["type"]} for e in error.errors(include_input=False, include_context=False)]
             print(json.dumps({"error": "configuration_invalid", "fields": errors}), file=sys.stderr)
+        elif isinstance(error, LegacyFileStateError):
+            print(json.dumps({"error": "legacy_file_state", "action": "Configure a new agent.work_dir; retain the old work directory."}), file=sys.stderr)
         else:
             print(json.dumps({"error": type(error).__name__}), file=sys.stderr)
         return 1

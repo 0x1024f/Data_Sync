@@ -1,0 +1,19 @@
+# Python >= 3.9
+# Install: python -m pip install -r requirements.txt
+# Version ranges match pyproject.toml; this is not a pinned lock file.
+
+# Runtime dependencies
+pydantic>=2.10,<3
+PyYAML>=6,<7
+boto3>=1.40,<2
+PyMySQL[rsa]>=1.1,<2
+
+# Windows service support
+pywin32>=308; sys_platform == "win32"
+
+# Packaging and tests
+pyinstaller>=6,<7
+pytest>=8,<9
+
+# Project build backend
+setuptools>=68

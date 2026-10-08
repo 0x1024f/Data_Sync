@@ -8,7 +8,6 @@ from tests.fakes import FakeS3
 def test_agent_once_end_to_end(config, monkeypatch):
     import data_sync.transport
     config.files[0].stable_seconds = 0
-    config.files[0].quiet_seconds = 0
     (config.files[0].root / "batch1_primary.dat").write_bytes(b"end-to-end")
     client = FakeS3()
     monkeypatch.setattr(data_sync.transport, "client_for", lambda _: client)
@@ -16,12 +15,21 @@ def test_agent_once_end_to_end(config, monkeypatch):
     state = State(config.agent.work_dir / "state.sqlite3")
     try:
         assert state.one("SELECT status FROM tasks")[0] == "COMMITTED"
-        manifest_key = state.one("SELECT manifest_key FROM batches")[0]
-        manifest = json.loads(client.objects[manifest_key][0])
-        assert client.objects[manifest["files"][0]["target_key"]][0] == b"end-to-end"
-        assert client.events[-1] == ("put", manifest_key)
+        assert set(client.objects) == {"batch1_primary.dat"}
+        assert client.objects["batch1_primary.dat"][0] == b"end-to-end"
+        assert state.one("SELECT manifest_key FROM batches")[0] is None
     finally:
         state.close()
+    (config.files[0].root / "batch1_primary.dat").write_bytes(b"updated after restart")
+    Agent(config).run(once=True)
+    assert client.objects["batch1_primary.dat"][0] == b"updated after restart"
+    assert len(client.events) == 2
+    Agent(config).run(once=True)
+    assert len(client.events) == 2
+    (config.files[0].root / "batch1_primary.dat").unlink()
+    Agent(config).run(once=True)
+    assert client.objects["batch1_primary.dat"][0] == b"updated after restart"
+    assert len(client.events) == 2
 
 
 def test_readonly_status_and_cli_validate(config, tmp_path, monkeypatch, capsys):

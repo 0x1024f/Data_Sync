@@ -1,4 +1,4 @@
-"""Insert-only capture. Requires commit-monotonic integer primary keys."""
+"""仅采集新增记录，要求整数主键按事务提交顺序单调递增。"""
 import base64
 import hashlib
 import json
@@ -14,7 +14,7 @@ from .manifest import build_manifest, canonical, digest_file, utc_text
 
 def encode_value(value):
     if isinstance(value, datetime):
-        # MySQL DATETIME is a wall clock, not an observation timestamp.
+        # MySQL DATETIME 表示本地日期时间，不代表采集时刻的时间戳。
         return {"$type": "datetime", "value": value.isoformat()}
     if isinstance(value, (date, dt_time)):
         return {"$type": type(value).__name__, "value": value.isoformat()}
@@ -46,8 +46,8 @@ class MySQLCollector:
 
     def poll(self, source, now):
         self.recover_prepared(source)
-        # Publish a prepared batch before performing any new SELECT. Its exact rows
-        # and target membership survive crashes before SQLite checkpoint commit.
+        # 执行新的 SELECT 前，先发布已准备好的批次。即使在 SQLite 检查点提交前崩溃，
+        # 该批次的完整行数据及目标列表也能保留。
         pending = self.state.one("SELECT * FROM batches WHERE source=? AND status='SEALED'", (source.id,))
         if pending:
             return self._publish(source, pending)
@@ -93,8 +93,8 @@ class MySQLCollector:
         if shutil.disk_usage(self.config.agent.work_dir).free < len(data) + self.config.agent.min_free_bytes:
             raise OSError("insufficient spool space")
         batch_no = f"{source.id}-{start}-{previous}"
-        # Deterministic staging path: recover the prepared envelope before SELECT on
-        # the next poll, even when a crash occurs before registering the batch.
+        # 使用确定的暂存路径：即使在注册批次前崩溃，也能在下一次轮询执行 SELECT 前
+        # 恢复已准备好的封装数据。
         prepared = self.config.agent.work_dir / "prepared" / (source.id + ".json")
         if not prepared.exists():
             dataset = {"type": "database_increment", "database": source.database, "table": source.table,
@@ -124,7 +124,7 @@ class MySQLCollector:
             old = self.state.one("SELECT * FROM batches WHERE id=?", (bid,))
         if old["status"] == "SEALED":
             self._publish(source, old)
-        # Recoverable envelope is removed only after ledger/checkpoint commit.
+        # 仅在台账和检查点提交后，才删除可恢复的封装数据。
         prepared.unlink()
 
     def _publish(self, source, batch):

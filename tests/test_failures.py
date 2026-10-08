@@ -21,9 +21,9 @@ def test_disk_full_does_not_publish(config, state, monkeypatch):
     collector = FileCollector(config, state)
     collector.scan(config.files[0], 10)
     collector.scan(config.files[0], 15)
-    with pytest.raises(OSError):
-        collector.scan(config.files[0], 25)
-    assert state.one("SELECT status FROM batches")[0] == "SEALED"
+    collector.scan(config.files[0], 25)
+    assert not state.all("SELECT * FROM batches")
+    assert state.one("SELECT error FROM files")[0] == "OSError"
     assert state.claim("sz", "worker") is None
 
 
@@ -46,6 +46,7 @@ def test_future_target_and_reenable(config, state):
     assert state.one("SELECT count(*) FROM tasks WHERE target='future'")[0] == 0
     (config.files[0].root / "batch2_primary.dat").write_bytes(b"next")
     FileCollector(config, state).scan(config.files[0], 101)
+    FileCollector(config, state).scan(config.files[0], 106)
     assert state.one("SELECT count(*) FROM tasks WHERE target='future'")[0] == 1
     future.enabled = False
     state.configure(config, 110)
@@ -82,17 +83,16 @@ def test_envelope_recovers_before_any_query(config, state, monkeypatch):
     assert state.one("SELECT status FROM batches")[0] == "READY"
 
 
-def test_scan_permission_failure_cannot_seal(config, state, monkeypatch):
+def test_scan_permission_failure_reported(config, state, monkeypatch):
     import data_sync.files
     root = config.files[0].root
     (root / "batch1_primary.dat").write_bytes(b"x")
     collector = FileCollector(config, state)
     collector.scan(config.files[0], 10)
-    collector.scan(config.files[0], 15)
     def broken_walk(*args, **kwargs):
         kwargs["onerror"](PermissionError("denied"))
-        yield
+        yield from ()
     monkeypatch.setattr(data_sync.files.os, "walk", broken_walk)
     with pytest.raises(PermissionError):
         collector.scan(config.files[0], 30)
-    assert state.one("SELECT status FROM batches")[0] == "OPEN"
+    assert not state.all("SELECT * FROM batches")

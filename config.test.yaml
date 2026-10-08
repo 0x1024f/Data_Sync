@@ -14,11 +14,6 @@ files:
     recursive: true
     initial_scan: existing_and_new
     stable_seconds: 3
-    quiet_seconds: 5
-    filename_regex: 'ZNET_(?P<batch_no>(?P<satellite>FY3F)_(?P<obs_time>\d{8}_\d{4}))\.(?P<role>hdf|xml)'
-    obs_time_format: '%Y%m%d_%H%M'
-    timezone_offset: '+08:00'
-    prefix: rs-raw
 
 mysql: []
 
@@ -28,9 +23,9 @@ targets:
     scheme: http
     host: 192.168.0.21
     port: 30009
-    # Replace with the existing bucket provided by the MinIO administrator.
+    # 替换为 MinIO 管理员提供的现有存储桶。
     bucket: enterprise-raw
     prefix: transfer
-    # Fill in literal credentials, or use env:VARIABLE_NAME.
+    # 直接填写凭据，或使用 env:VARIABLE_NAME 引用环境变量。
     access_key: 'YOUR_MINIO_ACCESS_KEY'
     secret_key: 'YOUR_MINIO_SECRET_KEY'

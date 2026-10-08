@@ -1,4 +1,4 @@
-"""Process locking, structured rotating logs and independent target workers."""
+"""进程锁、结构化轮转日志及各目标端的独立工作线程。"""
 import json
 import logging
 import os

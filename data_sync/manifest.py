@@ -1,4 +1,4 @@
-"""Immutable, canonical transport contract shared by all destinations."""
+"""所有目标端共用的不可变、规范化传输契约。"""
 import hashlib
 import json
 from datetime import datetime, timezone

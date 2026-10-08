@@ -55,7 +55,7 @@ def test_mixed_target_ports(config):
 
 
 def test_protocol_change_requires_new_target_id(config, state):
-    state.configure(config, now=1)  # Existing HTTPS fingerprint remains compatible.
+    state.configure(config, now=1)  # 现有 HTTPS 指纹仍保持兼容。
     config.targets[0].scheme = "http"
     with pytest.raises(ValueError):
         state.configure(config, now=2)

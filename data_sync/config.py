@@ -1,9 +1,9 @@
-"""Strict configuration with literal or environment-referenced MinIO credentials."""
+"""严格校验配置，支持直接填写 MinIO 凭据或引用环境变量。"""
 import os
 import re
 import ipaddress
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Literal, Optional
 
 import yaml
@@ -51,32 +51,6 @@ class FileSource(Strict):
     recursive: bool = True
     initial_scan: Literal["new_only", "existing_and_new"] = "new_only"
     stable_seconds: float = Field(default=60, ge=0)
-    quiet_seconds: float = Field(default=120, ge=0)
-    path_layout: Literal["batch", "relative"] = "batch"
-    filename_regex: str
-    obs_time_format: str = "%Y%m%d_%H%M"
-    timezone_offset: str = "+08:00"
-    prefix: str = "rs-raw"
-
-    @field_validator("prefix")
-    @classmethod
-    def key(cls, v):
-        return safe_key(v)
-
-    @field_validator("filename_regex")
-    @classmethod
-    def regex(cls, v):
-        if "batch_no" not in re.compile(v).groupindex:
-            raise ValueError("filename_regex requires named group batch_no")
-        return v
-
-    @field_validator("timezone_offset")
-    @classmethod
-    def offset(cls, v):
-        datetime.fromisoformat("2000-01-01T00:00:00" + v)
-        if not re.fullmatch(r"[+-]\d{2}:\d{2}", v):
-            raise ValueError("expected timezone offset such as +08:00")
-        return v
 
 
 class Target(Strict):
@@ -156,7 +130,7 @@ class MySQLSource(Strict):
     initial_scan: Literal["new_only", "existing_and_new"] = "new_only"
     prefix: str = "db-increment"
     ca_bundle: Optional[Path] = None
-    # AUTO_INCREMENT allocation order is not commit order. Opt-in is required.
+    # AUTO_INCREMENT 的分配顺序不等于事务提交顺序，必须显式启用。
     commit_order_guaranteed: Literal[True]
 
     @field_validator("prefix")
@@ -186,7 +160,7 @@ class Config(Strict):
             raise ValueError("source ids must be unique")
         if len({t.id for t in self.targets}) != len(self.targets):
             raise ValueError("target ids must be unique")
-        if len({t.prefix for t in self.targets}) != 1:
+        if self.mysql and len({t.prefix for t in self.targets}) != 1:
             raise ValueError("all targets must use identical prefixes for shared manifests")
         if not self.files and not self.mysql:
             raise ValueError("configure at least one source")

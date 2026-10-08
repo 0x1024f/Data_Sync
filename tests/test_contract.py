@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from data_sync.config import Config, MySQLSource, safe_key
 from data_sync.manifest import identity, validate_manifest
 from data_sync.runtime import ProcessLock
-from tests.test_files import ready_batch
+from tests.test_mysql import ready_mysql as ready_batch
 
 
 def test_manifest_identity_and_validation(config, state):

@@ -1,4 +1,4 @@
-"""Windows SCM entrypoint; config is fixed alongside the deployed service EXE."""
+"""Windows 服务控制管理器（SCM）入口；配置文件固定放在已部署服务的 EXE 同级目录中。"""
 import sys
 import threading
 from pathlib import Path

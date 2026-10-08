@@ -1,12 +1,20 @@
-"""SQLite durable ledger; each worker uses its own connection."""
+"""基于 SQLite 的持久化台账；每个工作线程使用独立连接。"""
 import json
 import sqlite3
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from .manifest import canonical
+
+
+class LegacyFileStateError(ValueError):
+    """必须保留旧的文件分组台账并创建新台账，不能直接迁移。"""
+
+
+class ObjectKeyConflict(ValueError):
+    """此目标对象键已被另一个数据源占用。"""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -34,24 +42,38 @@ CREATE TABLE IF NOT EXISTS uploads (
  task INTEGER NOT NULL, key TEXT NOT NULL, upload_id TEXT NOT NULL,
  parts TEXT NOT NULL DEFAULT '{}', part_size INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(task,key));
 CREATE TABLE IF NOT EXISTS checkpoints (source TEXT PRIMARY KEY, cursor INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS object_owners (
+ target TEXT NOT NULL, key TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(target,key));
 """
 
 
 class State:
     def __init__(self, path: Path):
+        if path.exists():
+            with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as probe:
+                version = probe.execute("PRAGMA user_version").fetchone()[0]
+                if version > 3:
+                    raise ValueError("state database requires newer agent")
+                tables = {r[0] for r in probe.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if version < 3 and "sources" in tables:
+                    if any("root" in json.loads(r[0]) for r in probe.execute("SELECT fingerprint FROM sources")):
+                        raise LegacyFileStateError("legacy file state: configure a new work_dir; retain the old directory")
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path), timeout=30, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA foreign_keys=ON")
-        if self.db.execute("PRAGMA user_version").fetchone()[0] > 2:
+        if self.db.execute("PRAGMA user_version").fetchone()[0] > 3:
             raise ValueError("state database requires newer agent")
         self.db.executescript(SCHEMA)
         with self.transaction() as db:
             if "part_size" not in [r[1] for r in db.execute("PRAGMA table_info(uploads)")]:
                 db.execute("ALTER TABLE uploads ADD COLUMN part_size INTEGER NOT NULL DEFAULT 0")
-            db.execute("PRAGMA user_version=2")
+            if "object_key" not in [r[1] for r in db.execute("PRAGMA table_info(batches)")]:
+                db.execute("ALTER TABLE batches ADD COLUMN object_key TEXT")
+            db.execute("CREATE INDEX IF NOT EXISTS file_object_queue ON batches(object_key,kind)")
+            db.execute("PRAGMA user_version=3")
 
     def close(self):
         self.db.close()
@@ -80,16 +102,12 @@ class State:
                 raise ValueError("source_id cannot change for existing state")
             db.execute("INSERT OR IGNORE INTO settings VALUES ('source_id',?)", (config.agent.source_id,))
             for source in config.files + config.mysql:
-                # Capture/identity changes need a new source id; tuning may change.
-                fields = ("root", "system", "filename_regex", "obs_time_format", "timezone_offset", "prefix", "include", "exclude", "recursive") if hasattr(source, "root") else ("host", "port", "database", "table", "primary_key", "fields", "prefix")
+                # 采集规则或身份信息变更时需要新的数据源 ID；调优参数可以修改。
+                fields = ("root", "system", "include", "exclude", "recursive") if hasattr(source, "root") else ("host", "port", "database", "table", "primary_key", "fields", "prefix")
                 identity = {k: str(getattr(source, k)) for k in fields}
-                if hasattr(source, "path_layout"):
-                    identity["path_layout"] = source.path_layout
                 fingerprint = canonical(identity).decode()
                 old = self.one("SELECT fingerprint FROM sources WHERE id=?", (source.id,))
                 previous = json.loads(old[0]) if old else None
-                if previous is not None and hasattr(source, "path_layout"):
-                    previous.setdefault("path_layout", "batch")
                 if old and previous != identity:
                     raise ValueError("source identity changed; use a new source id")
                 db.execute("INSERT OR IGNORE INTO sources(id,fingerprint) VALUES (?,?)", (source.id, fingerprint))
@@ -99,7 +117,7 @@ class State:
                     db.execute("UPDATE targets SET enabled=0 WHERE id=?", (old[0],))
             for target in config.targets:
                 fingerprint = canonical([target.host, target.port, target.bucket, target.prefix]).decode()
-                # Preserve legacy HTTPS fingerprints while distinguishing HTTP endpoints.
+                # 保留旧版 HTTPS 指纹的兼容性，同时区分 HTTP 端点。
                 if target.scheme != "https":
                     fingerprint = canonical([target.host, target.port, target.bucket, target.prefix, target.scheme]).decode()
                 old = self.one("SELECT * FROM targets WHERE id=?", (target.id,))
@@ -111,7 +129,7 @@ class State:
                 else:
                     activation = max(now, requested) if target.enabled and not old["enabled"] else old["activation"]
                     db.execute("UPDATE targets SET enabled=?,activation=? WHERE id=?", (target.enabled, activation, target.id))
-            # A stopped process's leases expire; a process lock prevents simultaneous owners.
+            # 已停止进程的租约会过期；进程锁可防止多个进程同时持有所有权。
             db.execute("UPDATE tasks SET owner=NULL,lease_until=NULL WHERE status!='COMMITTED'")
 
     def create_batch(self, source, batch_no, kind, dataset, now):
@@ -131,12 +149,38 @@ class State:
             if checkpoint:
                 db.execute("INSERT INTO checkpoints VALUES (?,?) ON CONFLICT(source) DO UPDATE SET cursor=excluded.cursor", checkpoint)
 
+    def register_file(self, source, relative, capture_id, descriptor, local, now):
+        with self.transaction() as db:
+            db.execute("""INSERT INTO batches(id,source,batch_no,kind,status,created,touched,dataset,
+                manifest,local_files,object_key) VALUES (?,?,?,'file','READY',?,?,'{}',?,?,?)""",
+                (capture_id, source, capture_id, now, now, canonical({"files": [descriptor]}).decode(),
+                 canonical({relative: str(local)}).decode(), relative))
+            for target in self.all("SELECT id FROM targets WHERE enabled=1 AND activation<=?", (now,)):
+                db.execute("INSERT INTO tasks(batch,target) VALUES (?,?)", (capture_id, target[0]))
+            db.execute("UPDATE files SET batch=?,status='BATCHED',error=NULL WHERE source=? AND path=?",
+                       (capture_id, source, relative))
+
+    def reserve_keys(self, task, batch, keys):
+        owner = ("file:" + batch["source"] + ":" + batch["object_key"]
+                 if batch["kind"] == "file" else "mysql:" + batch["id"])
+        with self.transaction() as db:
+            for key in keys:
+                row = self.one("SELECT owner FROM object_owners WHERE target=? AND key=?", (task["target"], key))
+                if row and row[0] != owner:
+                    raise ObjectKeyConflict("another source owns this object key")
+            for key in keys:
+                db.execute("INSERT OR IGNORE INTO object_owners VALUES (?,?,?)", (task["target"], key, owner))
+
     def claim(self, target, owner, lease_seconds=1800):
         now = time.time()
         with self.transaction() as db:
             row = self.one("""SELECT t.* FROM tasks t JOIN batches b ON b.id=t.batch JOIN targets d ON d.id=t.target
                 WHERE t.target=? AND d.enabled=1 AND b.status='READY'
                 AND t.status NOT IN ('COMMITTED','BLOCKED') AND t.next_retry<=?
+                AND (b.kind!='file' OR NOT EXISTS (
+                    SELECT 1 FROM tasks older JOIN batches ob ON ob.id=older.batch
+                    WHERE older.target=t.target AND older.id<t.id AND ob.kind='file'
+                    AND ob.object_key=b.object_key AND older.status!='COMMITTED'))
                 AND (t.owner IS NULL OR t.lease_until<?) ORDER BY t.id LIMIT 1""", (target, now, now))
             if not row:
                 return None
@@ -156,7 +200,8 @@ class State:
 
     def health(self):
         return {"tasks": [dict(r) for r in self.all("SELECT target,status,count(*) AS count FROM tasks GROUP BY target,status")],
-                "batches": [dict(r) for r in self.all("SELECT status,count(*) AS count FROM batches GROUP BY status")],
+                "file_versions": [dict(r) for r in self.all("SELECT status,count(*) AS count FROM batches WHERE kind='file' GROUP BY status")],
+                "batches": [dict(r) for r in self.all("SELECT status,count(*) AS count FROM batches WHERE kind!='file' GROUP BY status")],
                 "file_errors": [dict(r) for r in self.all("SELECT source,error,count(*) AS count FROM files WHERE error IS NOT NULL GROUP BY source,error")],
                 "checkpoints": [dict(r) for r in self.all("SELECT * FROM checkpoints")],
                 "runtime": [dict(r) for r in self.all("SELECT * FROM settings WHERE key!='source_id'")]}

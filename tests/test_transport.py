@@ -5,6 +5,7 @@ from data_sync.state import State
 from data_sync.transport import Delivery
 from tests.fakes import FakeS3
 from tests.test_files import ready_batch
+from tests.test_mysql import ready_mysql
 
 
 @pytest.mark.parametrize("response", [None, "not a mapping", {"Error": None}, {"Error": "invalid"}])
@@ -31,7 +32,7 @@ def claim(state, target="sz"):
 
 
 def test_manifest_last_and_repeat_idempotent(config, state):
-    batch = ready_batch(config, state)
+    batch = ready_mysql(config, state)
     store = FakeS3()
     task = claim(state)
     Delivery(state, config.targets[0], store).run(task)
@@ -44,7 +45,7 @@ def test_manifest_last_and_repeat_idempotent(config, state):
 
 
 def test_failed_manifest_retries_without_resending_data(config, state):
-    batch = ready_batch(config, state)
+    batch = ready_mysql(config, state)
     store = FakeS3()
     store.fail_manifest = True
     Delivery(state, config.targets[0], store).run(claim(state))
@@ -88,13 +89,15 @@ def test_lost_complete_response_recovers(config, state):
     assert store.upload_number == 1
 
 
-def test_conflict_blocks_without_manifest(config, state):
+def test_file_overwrites_without_manifest(config, state):
     batch = ready_batch(config, state)
     store = FakeS3()
     key = json.loads(batch["manifest"])["files"][0]["target_key"]
     store.objects[key] = (b"different", {"sha256": "wrong"})
     Delivery(state, config.targets[0], store).run(claim(state))
-    assert state.one("SELECT status FROM tasks")[0] == "BLOCKED"
+    assert state.one("SELECT status FROM tasks")[0] == "COMMITTED"
+    assert store.objects[key][0] == b"data"
+    assert len(store.objects) == 1
     assert batch["manifest_key"] not in store.objects
 
 

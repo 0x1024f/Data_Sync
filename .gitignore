@@ -5,6 +5,7 @@ __pycache__/
 build/
 dist/
 runtime/
+runtime-files/
 *.spec
 .DS_Store
 config.local.yaml

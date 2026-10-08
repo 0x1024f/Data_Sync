@@ -1,14 +1,27 @@
-# 当前验证记录
+# 逐文件同步改造验证记录
 
-本地执行环境：macOS ARM64，Python 3.9.6，隔离虚拟环境。
+本轮在 Windows 项目虚拟环境中执行，修改前完整基线为 63 项通过。
 
-已执行：
+## 分步验证
 
-- `python -m pytest -q`：34项通过，包括完整Agent单轮处理、真实botocore请求参数校验、分片中断恢复、完成响应丢失、manifest最后提交、同key冲突拒绝、多目标隔离、迟到文件隔离、首次扫描与重启、封口重启后拒绝源文件变化、磁盘/目录错误、MySQL prepared/checkpoint故障恢复。
-- `python -m pip check`：依赖无冲突。
-- `python -m compileall -q data_sync`：语法检查通过。
-- CLI帮助、配置验证和只读status已验证。
+1. 精简配置后：配置默认值、旧分组字段拒绝、路径解析及凭据测试，18 项通过。
+2. 独立采集后：筛选、独立稳定、非递归、首次基线后修改、同内容去重、读取失败恢复、复制期间变化及 MySQL 回归，17 项通过。
+3. 上传层改造后：路径、覆盖、分片恢复、旧状态拒绝、运行时、SDK 和协议测试，32 项通过；版本顺序、目标隔离、分片覆盖响应丢失、MySQL 键冲突与 SDK 请求参数补充测试，9 项通过。
+4. 最终 `python -m pytest -q -p no:cacheprovider`：**83 项通过**。以上分步集合有重叠，不能相加。
 
-SDK在Python3.9上报告停止支持提示，生产部署按operations.md使用Python3.11/3.12。GitHub workflow已提供Linux/Windows测试、HAProxy配置语法检查和Windows PyInstaller产物构建；该workflow尚未在此会话触发。
+`config.example.yaml`、`config.test.yaml`、`config.local.yaml` 均通过 CLI validate；此命令只检查配置与凭据引用，不连接远端。示例和本地监测根目录、include/exclude、initial_scan、目标连接参数保持原值，本地 work_dir 改为 `./runtime-files`，旧工作目录未删除或迁移。
 
-未在本机验证：Windows SCM实际安装/停止/异常拉起、Windows EXE运行、真实HAProxy TLS SNI路由与平滑reload、真实MinIO条件写支持与字节级SHA-256对账、真实MySQL提交顺序及权限。测试中的内存S3/MySQL替身只验证Agent逻辑；这些现场验收项见operations.md。
+## 端到端与故障场景
+
+- 临时目录 + 模拟 S3：首次采集、上传、进程重启、源文件修改、覆盖、重复扫描及本地删除；远端仅有相对路径文件，没有额外 manifest，本地删除保留远端对象。
+- 普通文件名、中文、多层目录、不同目录同名文件、`_data_sync` 普通路径；include/exclude、递归开关、符号链接跳过及空文件采集。
+- 同键旧版本占用、重试等待和 BLOCKED 均阻止新版本越过；其他目标可独立完成后续版本。
+- 分片上传中断、已有对象覆盖、重启续传、完成响应丢失；校验已完成分片不重复发送。
+- 文件源之间以及文件与 MySQL 数据/manifest 的键冲突均阻止后者写入。
+- 旧文件分组数据库以只读探测拒绝打开，测试比较拒绝前后文件字节一致。
+- 快照读取失败、复制中变化、登记前失败、磁盘不足、目录遍历失败、快照篡改；正常失败路径清理未登记临时文件，已登记快照保留。
+- MySQL 分页、prepared 恢复、游标、manifest 最后提交与条件写继续测试；真实 botocore Stubber 验证目录覆盖写及 MySQL 条件写请求形状。
+
+## 尚未现场验证
+
+未连接实际 MinIO 上传或覆盖文件，也未验证实际 MySQL、HAProxy、Windows SCM 或重新构建 EXE。内存替身与 SDK Stubber 验证 Agent 逻辑和请求参数，不能替代真实存储的字节级校验。现场验收步骤见 operations.md。

@@ -7,7 +7,7 @@ class S3Error(Exception):
 
 
 class FakeS3:
-    """Conditional object store with remote multipart state and failure hooks."""
+    """支持条件写入的模拟对象存储，包含远端分片状态和故障注入钩子。"""
     def __init__(self):
         self.objects = {}
         self.uploads = {}
@@ -27,10 +27,10 @@ class FakeS3:
         return {"ContentLength": len(body), "Metadata": metadata}
 
     def put_object(self, Bucket, Key, Body, Metadata, **kwargs):
-        assert kwargs["IfNoneMatch"] == "*"
+        assert kwargs.get("IfNoneMatch") in (None, "*")
         if self.fail_manifest and Key.endswith("manifest.json"):
             raise S3Error("ServiceUnavailable")
-        if Key in self.objects:
+        if Key in self.objects and kwargs.get("IfNoneMatch") == "*":
             raise S3Error("PreconditionFailed")
         self.objects[Key] = (Body, Metadata)
         self.events.append(("put", Key))
@@ -55,8 +55,8 @@ class FakeS3:
         return {"ETag": hashlib.md5(Body).hexdigest()}
 
     def complete_multipart_upload(self, Key, UploadId, MultipartUpload, **kwargs):
-        assert kwargs["IfNoneMatch"] == "*"
-        if Key in self.objects:
+        assert kwargs.get("IfNoneMatch") in (None, "*")
+        if Key in self.objects and kwargs.get("IfNoneMatch") == "*":
             raise S3Error("PreconditionFailed")
         upload = self.uploads.pop(UploadId)
         self.objects[Key] = (b"".join(upload["parts"][p["PartNumber"]] for p in MultipartUpload["Parts"]), upload["metadata"])

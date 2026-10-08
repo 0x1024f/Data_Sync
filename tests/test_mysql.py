@@ -9,6 +9,12 @@ from data_sync.mysql import MySQLCollector, encode_value
 from tests.fakes import FakeMySQL
 
 
+def ready_mysql(config, state):
+    src = source(config, state)
+    MySQLCollector(config, state, lambda _: FakeMySQL([{"id": 1, "value": "x"}])).poll(src, 10)
+    return state.one("SELECT * FROM batches WHERE kind='mysql'")
+
+
 def source(config, state, initial="existing_and_new"):
     value = MySQLSource(id="orders", host="localhost", user="env:DB_USER", password="env:DB_PASS",
                         database="production", table="orders", primary_key="id", fields=["id", "value"],

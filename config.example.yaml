@@ -14,16 +14,8 @@ files:
     recursive: true
     initial_scan: new_only
     stable_seconds: 60
-    quiet_seconds: 120
-    # batch: legacy batch directories; relative: exact root-relative keys at bucket root.
-    path_layout: batch
-    # FY3F_20260803_0145 is the batch identity shared by .hdf/.xml files.
-    filename_regex: 'ZNET_(?P<batch_no>(?P<satellite>FY3F)_(?P<obs_time>\d{8}_\d{4}))\.(?P<role>hdf|xml)'
-    obs_time_format: '%Y%m%d_%H%M'
-    timezone_offset: '+08:00'
-    prefix: rs-raw
 
-# Enable only after verifying commit-order guarantees (see docs/operations.md).
+# 仅在确认事务提交顺序保证后启用（参见 docs/operations.md）。
 mysql: []
 #  - id: orders
 #    host: 127.0.0.1
@@ -43,13 +35,13 @@ mysql: []
 targets:
   - id: suzhou
     enabled: true
-    # Use http for a direct plaintext MinIO endpoint; omit ca_bundle in that case.
+    # 直接连接明文 MinIO 端点时使用 http，此时无需配置 ca_bundle。
     scheme: https
     host: suzhou-transfer.example.internal
     port: 443
     bucket: enterprise-raw
     prefix: transfer
-    # Literal strings and env:VARIABLE_NAME references are both supported.
+    # 支持直接填写字符串，也支持使用 env:VARIABLE_NAME 引用环境变量。
     access_key: 'YOUR_MINIO_ACCESS_KEY'
     secret_key: 'YOUR_MINIO_SECRET_KEY'
     # ca_bundle: ./certificates/internal-ca.pem
