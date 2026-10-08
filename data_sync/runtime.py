@@ -45,7 +45,7 @@ class ProcessLock:
 class JsonFormatter(logging.Formatter):
     def format(self, record):
         data = {"time": time.time(), "level": record.levelname, "event": record.getMessage()}
-        for field in ("source", "target", "task", "code"):
+        for field in ("source", "target", "task", "code", "notification_attempt"):
             if hasattr(record, field):
                 data[field] = getattr(record, field)
         return json.dumps(data, ensure_ascii=False)

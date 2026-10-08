@@ -51,6 +51,13 @@ targets:
     retry_max_seconds: 300
     part_size: 16777216
     multipart_threshold: 16777216
+    # 可选：目录文件上传并校验成功后通知；取消下列注释即可启用。
+    # bucketName 自动使用本目标的 bucket；按实际情况配置桶名。
+    # notify:
+    #   url: http://192.168.0.22:30084/rs/third-party/tif-push/notify
+    #   module_type: ecology
+    #   path_prefix: /rs-shared
+    #   timeout_seconds: 30
   - id: site-b
     enabled: false
     host: site-b-transfer.example.internal

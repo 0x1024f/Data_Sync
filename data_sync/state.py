@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS tasks (
  next_retry REAL NOT NULL DEFAULT 0, owner TEXT, lease_until REAL, error TEXT,
  UNIQUE(batch,target));
 CREATE INDEX IF NOT EXISTS task_queue ON tasks(target,status,next_retry);
+CREATE TABLE IF NOT EXISTS notifications (
+ task INTEGER PRIMARY KEY REFERENCES tasks(id), url TEXT NOT NULL, payload TEXT NOT NULL,
+ timeout_seconds INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING',
+ attempts INTEGER NOT NULL DEFAULT 0, next_retry REAL NOT NULL DEFAULT 0, error TEXT);
 CREATE TABLE IF NOT EXISTS attempts (
  id INTEGER PRIMARY KEY, task INTEGER NOT NULL, started REAL NOT NULL, ended REAL,
  outcome TEXT, error TEXT);
@@ -52,7 +56,7 @@ class State:
         if path.exists():
             with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as probe:
                 version = probe.execute("PRAGMA user_version").fetchone()[0]
-                if version > 3:
+                if version > 4:
                     raise ValueError("state database requires newer agent")
                 tables = {r[0] for r in probe.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 if version < 3 and "sources" in tables:
@@ -64,7 +68,7 @@ class State:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA foreign_keys=ON")
-        if self.db.execute("PRAGMA user_version").fetchone()[0] > 3:
+        if self.db.execute("PRAGMA user_version").fetchone()[0] > 4:
             raise ValueError("state database requires newer agent")
         self.db.executescript(SCHEMA)
         with self.transaction() as db:
@@ -73,7 +77,7 @@ class State:
             if "object_key" not in [r[1] for r in db.execute("PRAGMA table_info(batches)")]:
                 db.execute("ALTER TABLE batches ADD COLUMN object_key TEXT")
             db.execute("CREATE INDEX IF NOT EXISTS file_object_queue ON batches(object_key,kind)")
-            db.execute("PRAGMA user_version=3")
+            db.execute("PRAGMA user_version=4")
 
     def close(self):
         self.db.close()
@@ -194,14 +198,52 @@ class State:
 
     def finish(self, task, status, error=None, delay=0):
         with self.transaction() as db:
-            db.execute("UPDATE tasks SET status=?,error=?,next_retry=?,owner=NULL,lease_until=NULL WHERE id=? AND owner=?",
-                       (status, error, time.time() + delay, task["id"], task["owner"]))
-            db.execute("UPDATE attempts SET ended=?,outcome=?,error=? WHERE task=? AND ended IS NULL", (time.time(), status, error, task["id"]))
+            self._finish(db, task, status, error, time.time() + delay)
+
+    def _finish(self, db, task, status, error, next_retry):
+        db.execute("UPDATE tasks SET status=?,error=?,next_retry=?,owner=NULL,lease_until=NULL WHERE id=? AND owner=?",
+                   (status, error, next_retry, task["id"], task["owner"]))
+        db.execute("UPDATE attempts SET ended=?,outcome=?,error=? WHERE task=? AND ended IS NULL",
+                   (time.time(), status, error, task["id"]))
+
+    def prepare_notification(self, task, config, payload):
+        with self.transaction() as db:
+            db.execute("INSERT OR IGNORE INTO notifications(task,url,payload,timeout_seconds) VALUES (?,?,?,?)",
+                       (task["id"], config.url, canonical(payload).decode(), config.timeout_seconds))
+            db.execute("UPDATE tasks SET status='NOTIFYING' WHERE id=? AND owner=?", (task["id"], task["owner"]))
+
+    def start_notification(self, task):
+        with self.transaction() as db:
+            row = self.one("SELECT * FROM notifications WHERE task=?", (task["id"],))
+            attempt = row["attempts"] + 1
+            # On an in-flight crash, allow the request timeout and backoff before recovery.
+            next_retry = time.time() + row["timeout_seconds"] + (30 if attempt == 1 else 180)
+            db.execute("UPDATE notifications SET status='SENDING',attempts=?,next_retry=?,error='Interrupted' WHERE task=?",
+                       (attempt, next_retry, task["id"]))
+            db.execute("UPDATE tasks SET status='NOTIFYING',next_retry=?,lease_until=? WHERE id=? AND owner=?",
+                       (next_retry, time.time() + 1800, task["id"], task["owner"]))
+            return attempt
+
+    def finish_notification(self, task, error=None):
+        with self.transaction() as db:
+            row = self.one("SELECT attempts FROM notifications WHERE task=?", (task["id"],))
+            status = "SUCCEEDED" if error is None else ("FAILED" if row["attempts"] >= 3 else "RETRY_WAIT")
+            next_retry = time.time() + (30 if row["attempts"] == 1 else 180) if status == "RETRY_WAIT" else 0
+            db.execute("UPDATE notifications SET status=?,next_retry=?,error=? WHERE task=?",
+                       (status, next_retry, error, task["id"]))
+            self._finish(db, task, "NOTIFY_RETRY_WAIT" if status == "RETRY_WAIT" else "COMMITTED", None, next_retry)
+            return status
 
     def health(self):
+        # The read-only status command must also work before a v3 database is upgraded.
+        notifications = []
+        if self.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notifications'"):
+            notifications = [dict(r) for r in self.all("""SELECT t.target,n.status,count(*) AS count
+                FROM notifications n JOIN tasks t ON t.id=n.task GROUP BY t.target,n.status""")]
         return {"tasks": [dict(r) for r in self.all("SELECT target,status,count(*) AS count FROM tasks GROUP BY target,status")],
                 "file_versions": [dict(r) for r in self.all("SELECT status,count(*) AS count FROM batches WHERE kind='file' GROUP BY status")],
                 "batches": [dict(r) for r in self.all("SELECT status,count(*) AS count FROM batches WHERE kind!='file' GROUP BY status")],
                 "file_errors": [dict(r) for r in self.all("SELECT source,error,count(*) AS count FROM files WHERE error IS NOT NULL GROUP BY source,error")],
+                "notifications": notifications,
                 "checkpoints": [dict(r) for r in self.all("SELECT * FROM checkpoints")],
                 "runtime": [dict(r) for r in self.all("SELECT * FROM settings WHERE key!='source_id'")]}

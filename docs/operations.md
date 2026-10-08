@@ -1,5 +1,7 @@
 # 部署与故障处理
 
+目录文件上传后可调用业务通知接口，支持 30 秒、3 分钟重试及重启恢复，详见[上传后通知配置与故障处理](upload-notification.md)。
+
 ## 目录文件同步
 
 文件仅按 `root`、`include`、`exclude` 匹配，exclude 优先；保留原有 glob 匹配规则。`recursive: false` 只扫描根目录。文件连续 `stable_seconds` 大小和修改时间不变后独立生成快照，上传对象键为根目录相对路径。例如 root 为 `E:/data` 时，`E:/data/FY3F/a.hdf` 上传为 `FY3F/a.hdf`，不使用 targets.prefix，不添加日期、来源或批次目录。

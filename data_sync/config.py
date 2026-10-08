@@ -5,6 +5,7 @@ import ipaddress
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -53,6 +54,34 @@ class FileSource(Strict):
     stable_seconds: float = Field(default=60, ge=0)
 
 
+class NotifyConfig(Strict):
+    url: str
+    module_type: str = Field(min_length=1)
+    path_prefix: str = ""
+    timeout_seconds: int = Field(default=30, ge=1, le=600)
+
+    @field_validator("url")
+    @classmethod
+    def endpoint(cls, value):
+        parts = urlsplit(value)
+        if (parts.scheme not in ("http", "https") or not parts.hostname
+                or parts.username is not None or parts.password is not None or parts.fragment
+                or any(c.isspace() for c in value)):
+            raise ValueError("notification URL must be an HTTP(S) endpoint without credentials or fragment")
+        parts.port  # Validate port syntax and range.
+        return value
+
+    @field_validator("path_prefix")
+    @classmethod
+    def prefix_path(cls, value):
+        if "\\" in value or any(ord(c) < 32 for c in value):
+            raise ValueError("notification prefix must use forward slashes")
+        parts = [p for p in value.split("/") if p]
+        if any(p in (".", "..") for p in parts):
+            raise ValueError("notification prefix must not contain dot segments")
+        return ("/" if value.startswith("/") else "") + "/".join(parts)
+
+
 class Target(Strict):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     enabled: bool = True
@@ -72,6 +101,7 @@ class Target(Strict):
     retry_max_seconds: float = Field(default=300, gt=0)
     part_size: int = Field(default=16777216, ge=5242880, le=536870912)
     multipart_threshold: int = Field(default=16777216, ge=5242880, le=536870912)
+    notify: Optional[NotifyConfig] = None
 
     @field_validator("access_key", "secret_key")
     @classmethod

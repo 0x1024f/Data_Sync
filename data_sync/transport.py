@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .config import safe_key, secret
 from .manifest import canonical, digest_file, validate_manifest
+from .notify import NotificationError, post_notification
 
 log = logging.getLogger(__name__)
 
@@ -44,10 +45,17 @@ def client_for(target):
 
 
 class Delivery:
-    def __init__(self, state, target, client=None, stop=None):
+    def __init__(self, state, target, client=None, stop=None, notifier=None):
         self.state, self.target = state, target
-        self.client = client if client is not None else client_for(target)
+        self._client = client
         self.stop = stop
+        self.notifier = notifier if notifier is not None else post_notification
+
+    @property
+    def client(self):
+        if self._client is None:
+            self._client = client_for(self.target)
+        return self._client
 
     def _head(self, key):
         try:
@@ -69,6 +77,9 @@ class Delivery:
 
     def run(self, task):
         try:
+            if self.state.one("SELECT 1 FROM notifications WHERE task=?", (task["id"],)):
+                self._notify(task)
+                return
             batch = self.state.one("SELECT * FROM batches WHERE id=?", (task["batch"],))
             manifest = json.loads(batch["manifest"])
             overwrite = batch["kind"] == "file"
@@ -101,6 +112,16 @@ class Delivery:
                 self.state.phase(task, "UPLOADING_MANIFEST")
                 payload = canonical(manifest)
                 self._put(batch["manifest_key"], payload, hashlib.sha256(payload).hexdigest(), "application/json")
+            if overwrite and self.target.notify is not None:
+                config = self.target.notify
+                key = manifest["files"][0]["target_key"]
+                path = config.path_prefix.rstrip("/") + "/" + key if config.path_prefix else key
+                self.state.prepare_notification(task, config, {
+                    "moduleType": config.module_type, "bucketName": self.target.bucket,
+                    "filePathList": [path],
+                })
+                self._notify(task)
+                return
             self.state.finish(task, "COMMITTED")
             log.info("task_committed", extra={"target": self.target.id, "task": task["id"]})
         except Exception as error:
@@ -111,6 +132,34 @@ class Delivery:
             self.state.finish(task, "BLOCKED" if permanent else "RETRY_WAIT", code, random.uniform(delay / 2, delay))
             # 禁止记录原始 SDK/SQL 错误信息，其中可能包含敏感信息或行数据。
             log.error("task_failed", extra={"target": self.target.id, "task": task["id"], "code": code})
+
+    def _notify(self, task):
+        row = self.state.one("SELECT * FROM notifications WHERE task=?", (task["id"],))
+        extra = {"target": self.target.id, "task": task["id"], "notification_attempt": row["attempts"]}
+        if row["status"] in ("SUCCEEDED", "FAILED"):
+            self.state.finish(task, "COMMITTED")
+            return
+        if row["attempts"] >= 3:
+            self.state.finish_notification(task, row["error"] or "Interrupted")
+            log.error("notification_exhausted", extra={**extra, "code": row["error"] or "Interrupted"})
+            return
+        if self.stop and self.stop.is_set():
+            self.state.finish(task, "NOTIFY_RETRY_WAIT", delay=max(0, row["next_retry"] - time.time()))
+            return
+        extra["notification_attempt"] = self.state.start_notification(task)
+        error = None
+        try:
+            self.notifier(row["url"], json.loads(row["payload"]), row["timeout_seconds"])
+        except Exception as exc:
+            error = str(exc) if isinstance(exc, NotificationError) else type(exc).__name__
+        status = self.state.finish_notification(task, error)
+        if error:
+            log.error("notification_exhausted" if status == "FAILED" else "notification_failed",
+                      extra={**extra, "code": error})
+        else:
+            log.info("notification_succeeded", extra=extra)
+        if status != "RETRY_WAIT":
+            log.info("task_committed", extra=extra)
 
     def _put(self, key, body, digest, content_type, overwrite=False):
         if hashlib.sha256(body).hexdigest() != digest:
